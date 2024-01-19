@@ -1,0 +1,53 @@
+import sys
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType  # Add these import statements
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from pyspark import SparkContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import to_date, expr, col
+
+# Initialize SparkContext and GlueContext
+args = getResolvedOptions(sys.argv, ['JOB_NAME','keypara'])
+sc = SparkContext()
+spark = SparkSession.builder.appName("example").getOrCreate()
+glueContext = GlueContext(sc)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+input_path=args['keypara']
+
+#input_path="s3://prod-wayfair-source-bucket-1/Source_data/Employee_details/"
+
+
+
+
+# Define the schema for the PySpark DataFrame
+schema = StructType([
+    StructField("em_date", StringType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("first_name", StringType(), True),
+    StructField("last_name", StringType(), True),
+    StructField("batch_id", StringType(), True),
+    StructField("location_id", IntegerType(), True),
+    StructField("start_date", StringType(), True),
+    StructField("end_date", StringType(), True),
+    StructField("shift_id", StringType(), True),
+    StructField("employee_type", StringType(), True),
+    StructField("employee_type_id", StringType(), True),
+])
+
+# Create a PySpark DataFrame
+df = spark.read.format("csv").option("header", True).option("inferSchema", True).load(input_path)
+
+# Redefine schema for date columns:
+df = df.withColumn("em_date", to_date(df["em_date"], 'yyyy-MM-dd')) \
+    .withColumn("start_date", to_date(df["start_date"], 'yyyy-MM-dd')) \
+    .withColumn("end_date", to_date(df["end_date"], 'yyyy-MM-dd')) \
+    .where(col("em_date") <= expr("current_date() - interval 1 day"))
+
+# Writing down to s3 target location:
+output_path = "s3://prod-wayfair-raw-buckett/raw_data/Employee_details/"
+df.coalesce(1).write.option("header", True).format("csv").mode("overwrite").save(output_path)
+

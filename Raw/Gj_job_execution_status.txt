@@ -1,0 +1,70 @@
+
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark import *
+from pyspark.sql import *
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+import boto3
+
+## @params: [JOB_NAME]
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+
+
+# data :
+data = [
+    ('', 'j_5f3ba77bdda48f8c96b8036040377a6cd467af9ee93437c537789225362929b4', 'Gj-raw-employee-punch-in', None, 0, 'not executed yet'),
+    ('', 'j_5620990842bdae67dbfa15564d78577967a339c7df7c424ee25f37eddf6a5225', 'Gj-raw-employee-punch-out', None, 0, 'not executed yet'),
+    ('','j_c65c6c7d10240c2e74449a66437a051cf5b2d58f6986fe03c8a877e8643d10cd','Gj-staging-employee-details', None, 0, 'not executed yet'),
+    ('','j_c865a434f83a97c27b268a90280946fa68fa9949401b2d0fadf032122d03ad43','Gj-staging-employee-attendance', None, 0, 'not executed yet'),
+    ('','j_8b70ccb9b71110f2012e29032f220746da3aef602eea8d0417306954191e7cd3','Gj-staging-employee-facility-log', None, 0, 'not executed yet'),
+    ('','j_4112dcf0a94d59f889288219d649f18bb1d28a9ac0fbcb5ce2e0c4411c17852a','Gj-staging-employee-shift-details', None, 0, 'not executed yet'),
+    ('','j_822355868ae35fa85e926a45f057960f32fb126974e07ea9c7c03f982db58c19','Gj-staging-employee-leave-details', None, 0, 'not executed yet')
+]
+
+# schema :
+schema1 = StructType([
+    StructField("execution_date", StringType(), True),
+    StructField("job_id", StringType(), True),
+    StructField("job_name", StringType(), True),
+    StructField("job_run_id", StringType(), True),
+    StructField("is_completed", IntegerType(), True), 
+    StructField("job_executed_by", StringType(), True)
+])
+
+df_jobs_schedule_status = spark.createDataFrame(data,schema=schema1). \
+withColumn("execution_date",to_date(current_date(), 'yyyy-MM-dd'))
+
+df_jobs_schedule_status.show()
+
+
+
+jdbc_url = "jdbc:sqlserver://wayfair-prod-db.c98yykqo2trj.us-east-1.rds.amazonaws.com:1433;databaseName=prod_wayfair_source;"
+username = "developer_1"
+password = "Wayfair_1234"
+dbtable = "dbo.tbl_job_execution_status"
+
+
+
+df_jobs_schedule_status.write \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+    .mode("append").save() 
+
+
+
+print("appended data to the table")

@@ -1,0 +1,122 @@
+import sys
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DateType
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from pyspark import SparkContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import to_date, expr, col
+import boto3
+from datetime import datetime
+
+# Initialize SparkContext and GlueContext
+args = getResolvedOptions(sys.argv, ['JOB_NAME','keypara'])
+spark = SparkSession.builder.appName("example").getOrCreate()
+glueContext = GlueContext(SparkContext.getOrCreate())
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+input_path=args['keypara']
+#input_path='s3://prod-wayfair-source-bucket-1/Source_data/Employee_shift_details/'
+
+# Define the schema for the PySpark DataFrame
+schema = StructType([
+    StructField("shift_id", StringType(), True),
+    StructField("shift_date", StringType(), True),
+     StructField("shift_name", StringType(), True),
+    StructField("shift_first_half_start_time", StringType(), True),
+    StructField("shift_first_half_end_time", StringType(), True),
+    StructField("meal_start_time", StringType(), True),
+    StructField("meal_end_time", StringType(), True),
+    StructField("shift_second_half_start_time", StringType(), True),
+    StructField("shift_second_half_end_time", StringType(), True),
+])
+
+# Create a PySpark DataFrame with the defined schema
+df = spark.read.format("csv").option("header", True).schema(schema).load(input_path)
+
+
+
+# type casting to date & timestamp columns to respective datatype:
+df = df.withColumn("shift_date", to_date(df["shift_date"], 'yyyy-MM-dd')) \
+    .withColumn("shift_first_half_start_time", col("shift_first_half_start_time").cast("timestamp")) \
+    .withColumn("shift_first_half_end_time", col("shift_first_half_end_time").cast("timestamp")) \
+    .withColumn("meal_start_time", col("meal_start_time").cast("timestamp")) \
+    .withColumn("meal_end_time", col("meal_end_time").cast("timestamp")) \
+    .withColumn("shift_second_half_start_time", col("shift_second_half_start_time").cast("timestamp")) \
+    .withColumn("shift_second_half_end_time", col("shift_second_half_end_time").cast("timestamp")) \
+    .where(col("shift_date") <= expr("current_date() - interval 1 day"))
+    
+#df.show()
+#df.printSchema()
+# write into a single CSV file to the target location:
+output_path = "s3://prod-wayfair-raw-buckett/raw_data/Employee_shift_details/"
+df.coalesce(1).write.option("header", True).format("csv").mode("overwrite").save(output_path)
+
+print("Job completed")
+
+
+
+
+import boto3
+#input_path=args['keypara']
+input_path='s3://prod-wayfair-source-bucket-1/Source_data/Employee_shift_details/'
+
+# Define the schema for the PySpark DataFrame
+schema = StructType([
+    StructField("shift_id", StringType(), True),
+    StructField("shift_date", StringType(), True),
+     StructField("shift_name", StringType(), True),
+    StructField("shift_first_half_start_time", StringType(), True),
+    StructField("shift_first_half_end_time", StringType(), True),
+    StructField("meal_start_time", StringType(), True),
+    StructField("meal_end_time", StringType(), True),
+    StructField("shift_second_half_start_time", StringType(), True),
+    StructField("shift_second_half_end_time", StringType(), True),
+])
+
+# Create a PySpark DataFrame with the defined schema
+df = spark.read.format("csv").option("header", True).schema(schema).load(input_path)
+
+
+
+# type casting to date & timestamp columns to respective datatype:
+df = df.withColumn("shift_date", to_date(df["shift_date"], 'yyyy-MM-dd')) \
+    .withColumn("shift_first_half_start_time", col("shift_first_half_start_time").cast("timestamp")) \
+    .withColumn("shift_first_half_end_time", col("shift_first_half_end_time").cast("timestamp")) \
+    .withColumn("meal_start_time", col("meal_start_time").cast("timestamp")) \
+    .withColumn("meal_end_time", col("meal_end_time").cast("timestamp")) \
+    .withColumn("shift_second_half_start_time", col("shift_second_half_start_time").cast("timestamp")) \
+    .withColumn("shift_second_half_end_time", col("shift_second_half_end_time").cast("timestamp")) \
+    .where(col("shift_date") <= expr("current_date() - interval 1 day"))
+    
+#df.show()
+#df.printSchema()
+# write into a single CSV file to the target location:
+output_path = "s3://prod-wayfair-raw-buckett/raw_data/Employee_shift_details/"
+df.coalesce(1).write.option("header", True).format("csv").mode("overwrite").save(output_path)
+
+print("Job completed")
+
+
+#lambda invokation 
+# Lambda invocation
+if df.count() > 0:
+    def invoke_raw_employee_facility_log_lambda():
+        try:
+            lambda_client = boto3.client('lambda')
+            function_name = "lm_raw_employee_facility_log"
+            lambda_client.invoke(
+                FunctionName=function_name,
+                InvocationType='RequestResponse'
+            )
+            print("Lambda function for raw employee facility log has been invoked successfully")
+        except Exception as e:
+            print(f"Error invoking Lambda function: {e}")
+
+    invoke_raw_employee_facility_log_lambda()
+    
+else:
+    print("Glue job 'Gj-raw-employee-shift-details' is failed and the invocation of lambda function 'lm_raw_employee_facility_log' is also failed.")
+

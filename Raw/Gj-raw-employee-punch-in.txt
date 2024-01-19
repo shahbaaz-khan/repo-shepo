@@ -1,0 +1,145 @@
+import sys
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from pyspark import SparkContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+import boto3
+
+
+# Initialize SparkContext and GlueContext
+
+args = getResolvedOptions(sys.argv, ['JOB_NAME', 'keypara'])
+sc = SparkContext()
+spark = SparkSession.builder.appName("example").getOrCreate()
+glueContext = GlueContext(sc)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+
+
+
+input_path = args['keypara']
+
+schema = StructType([
+    StructField("event_id", StringType(), True),
+    StructField("event_date", StringType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("event_timestamp", StringType(), True),
+    StructField("location_id", StringType(), True),
+    StructField("shift_id", StringType(), True)
+])
+
+# Create a PySpark DataFrame
+df = spark.read.format("csv").option("header", True).option("inferSchema", True).schema(schema).load(input_path)
+
+
+
+# Type casting to date & timestamp columns to respective datatype:
+df = df.withColumn("event_date", to_date(df["event_date"], 'yyyy-MM-dd')) \
+    .withColumn("event_timestamp", col("event_timestamp").cast("timestamp")) \
+    .where(col("event_date") <= expr("current_date() - interval 1 day"))
+
+# Write into a single CSV file to the target location:
+output_path = "s3://prod-wayfair-raw-buckett/raw_data/Employee_punch_in/"
+df.coalesce(1).write.option("header", False).format("csv").mode("overwrite").save(output_path)
+
+
+
+
+job_id = args['JOB_ID']
+job_name = args['JOB_NAME']
+job_run_id = args['JOB_RUN_ID']
+
+print(args)
+
+jdbc_url = "jdbc:sqlserver://wayfair-prod-db.c98yykqo2trj.us-east-1.rds.amazonaws.com:1433;databaseName=prod_wayfair_source;"
+username = "developer_1"
+password = "Wayfair_1234"
+dbtable = "dbo.tbl_job_execution_status"
+
+df_jobs_schedule_status= spark.read \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .load().cache()
+
+
+
+# making CTE of dataframe
+df_jobs_schedule_status.createOrReplaceTempView("vw_job_status")
+
+
+# Get the current date directly in the query
+query = f"""
+SELECT
+    execution_date,
+    job_id,
+    job_name,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN '{job_run_id}' ELSE job_run_id END AS job_run_id,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN 1 ELSE is_completed END AS is_completed,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN 'lambda trigger' ELSE job_executed_by END AS job_executed_by
+FROM vw_job_status
+"""
+
+# Execute the query and store the results
+df_jobs_schedule_status = spark.sql(query)
+df_jobs_schedule_status.show()
+df_jobs_schedule_status.printSchema()
+
+
+
+
+# do not run below part :
+df_jobs_schedule_status.write \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+    .mode("overwrite").save() 
+
+
+
+
+
+# Filter for the specific job_id and check is_completed
+filtered_df = df_jobs_schedule_status.filter(col("job_id") == "j_5620990842bdae67dbfa15564d78577967a339c7df7c424ee25f37eddf6a522")\
+                 .filter(col("execution_date") == current_date())\
+                 .filter(col("is_completed") == 1)
+
+
+
+
+x="Gj-raw-employee-punch-out"
+# Checking if another dependet raw job is completed.if it is completed then we will trigger the staging job :
+
+
+if filtered_df.count() > 0:
+    print("Both raw jobs are completed.")
+    print("invoking lambda function to execute staging job.")
+    
+    def invoke_staging_emp_attendance_lambda():
+        try:
+            
+            lambda_client = boto3.client('lambda')
+            function_name="lm_staging_Employee_Attendance"
+            lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType='RequestResponse'
+            )
+            
+            print("Lambda function for staging employee attendance has been invoked successfully")
+        except Exception as e:
+            print(f"Error invoking Lambda function: {e}")
+    invoke_staging_emp_attendance_lambda()
+    
+else:
+    print(f"dependent raw job named :{x} , is not finished yet.")
+    

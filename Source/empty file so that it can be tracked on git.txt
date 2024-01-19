@@ -1,0 +1,2 @@
+this folder contains different data category folders.
+and those folders contain respective category data.

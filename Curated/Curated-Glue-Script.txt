@@ -1,0 +1,90 @@
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
+from awsglue.job import Job
+
+## @params: [JOB_NAME]
+args = getResolvedOptions(sys.argv, ['JOB_NAME','keypara'])
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+
+input_path=args['keypara']
+#input_path="s3://prod-wayfair-foundation-buckett/foundation_data/Employee_performance_metrics/"
+
+
+
+schema = StructType([
+    StructField("date", DateType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("emp_full_name", StringType(), True),
+    StructField("batch_id", StringType(), True),
+    StructField("location_id", IntegerType(), True),
+    StructField("shift_id", StringType(), True),
+    StructField("employee_type_id", StringType(), True),
+    StructField("employee_type", StringType(), True),
+    StructField("first_punch_in", TimestampType(), True),
+    StructField("last_punch_out", TimestampType(), True),
+    StructField("total_visits_outside_premises", IntegerType(), True),
+    StructField("total_duration_in_premises", IntegerType(), True),
+    StructField("total_duration_in_cafeteria", IntegerType(), True),
+    StructField("total_duration_in_rest_room", IntegerType(), True),
+    StructField("shift_name", StringType(), True),
+    StructField("meal_start_time", TimestampType(), True),
+    StructField("meal_end_time", TimestampType(), True),
+    StructField("scheduled_meal_duration", IntegerType(), True),
+    StructField("scheduled_arrival_time_FTE_PTFH", TimestampType(), True),
+    StructField("scheduled_arrival_time_PTSH", TimestampType(), True),
+    StructField("scheduled_departure_time_PTFH", TimestampType(), True),
+    StructField("scheduled_departure_time_FTE_PTSH", TimestampType(), True),
+    StructField("scheduled_work_duration_PTFH", IntegerType(), True),
+    StructField("scheduled_work_duration_PTSH", IntegerType(), True),
+    StructField("scheduled_work_duration_FTE", IntegerType(), True),
+    StructField("application_id", StringType(), True),
+    StructField("application_date", DateType(), True),
+    StructField("approval_status", StringType(), True),
+    StructField("leave_type", StringType(), True),
+    StructField("leave_start_timestamp", TimestampType(), True),
+    StructField("leave_end_timestamp", TimestampType(), True),
+    StructField("leave_duration", TimestampType(), True),
+    StructField("is_first_half_day", IntegerType(), True),
+    StructField("is_second_half_day", IntegerType(), True),
+    StructField("is_full_day_leave", IntegerType(), True)
+])
+
+
+
+
+# Create a PySpark DataFrame with the defined schema
+df = spark.read.format("csv").option("header", False).schema(schema).load(input_path)
+
+
+#df.show()
+#df.printSchema()
+
+
+df.createOrReplaceTempView("vw_employee_performance_metrics")
+
+tmp_employee_performance_metrics = spark.sql(
+    '''
+    select date,date_format(date,'EEEE') as day,date_format(date,'MMMM') as month,extract(year from date) as year,extract(quarter from date) as quarter,employee_id,emp_full_name,batch_id,location_id,shift_id,shift_name,employee_type_id,employee_type,first_punch_in as arrival_time,last_punch_out as exit_time,total_visits_outside_premises,total_duration_in_premises,total_duration_in_cafeteria,total_duration_in_rest_room,(total_duration_in_cafeteria+total_duration_in_rest_room) as total_non_working_duration,(total_duration_in_premises-(total_duration_in_cafeteria+total_duration_in_rest_room)) as total_working_duration, scheduled_arrival_time_FTE_PTFH,scheduled_arrival_time_PTSH,scheduled_departure_time_PTFH,scheduled_departure_time_FTE_PTSH,scheduled_work_duration_PTFH,scheduled_work_duration_PTSH,scheduled_work_duration_FTE,scheduled_meal_duration,application_id,application_date,approval_status,leave_type,leave_start_timestamp,leave_end_timestamp,leave_duration,case when is_first_half_day=1 then 1 end as is_first_half_day,case when is_second_half_day=1 then 1 end as is_second_half_day,case when is_full_day_leave=1 then 1 end as is_full_day_leave
+    from vw_employee_performance_metrics
+    '''
+    )
+
+#tmp_employee_performance_metrics.show()
+#tmp_employee_performance_metrics.printSchema()
+
+
+# Writing down to s3 target location:
+output_path = "s3://prod-wayfair-curated-bucket/curated_data/Employee_performance_metrics_isd/"
+tmp_employee_performance_metrics.coalesce(1).write.option("header", False).format("csv").mode("overwrite").save(output_path)

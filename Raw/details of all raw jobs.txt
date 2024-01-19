@@ -1,0 +1,11 @@
+Glue Scripts for RAW JOBS:-
+
+
+1:Gj-raw-employee-details- Triggered by lambda
+2:Gj-raw-employee-punch-in- Triggered by lambda
+3:Gj-raw-employee-punch-out- Triggered by lambda
+4:Gj-raw-employee-shift-details- Triggered by lambda
+5:Gj-raw-employee-leave-details- Triggered by lambda
+6:Gj-raw-employee-facility-log- Triggered by lambda
+7:Gj_job_execution_status- You have to run it manually
+

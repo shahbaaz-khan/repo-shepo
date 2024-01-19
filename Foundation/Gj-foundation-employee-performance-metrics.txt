@@ -1,0 +1,265 @@
+import sys
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType  # Add these import statements
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from pyspark import SparkContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+
+# Initialize SparkContext and GlueContext
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
+spark = SparkSession.builder.appName("example").getOrCreate()
+glueContext = GlueContext(sc)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+ 
+
+#1:df_staging_employee_details
+
+input_path1='s3://prod-wayfair-staging-bucket-1/staging_data/Employee_details/'
+
+# Define the schema for the PySpark DataFrame
+schema = StructType([
+    StructField("date", StringType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("emp_full_name", StringType(), True),
+    StructField("batch_id", StringType(), True),
+    StructField("location_id", IntegerType(), True),
+    StructField("shift_id", StringType(), True),
+    StructField("employee_type_id", StringType(), True)
+])
+
+# Create a PySpark DataFrame
+df_staging_employee_details = spark.read.format("csv").option("header", False).schema(schema).load(input_path1)
+
+# Redefine schema for date columns:
+df_staging_employee_details = df_staging_employee_details.withColumn("date", to_date(df_staging_employee_details["date"], 'yyyy-MM-dd')) 
+
+#df_staging_employee_details.show()
+#df_staging_employee_details.printSchema()
+
+
+
+#2:df_staging_employee_attendance
+
+input_path2="s3://prod-wayfair-staging-bucket-1/staging_data/Employee_attendance_table/"
+ 
+ 
+# Define the schema for the PySpark DataFrame
+schema2 = StructType([
+    StructField("event_date", StringType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("first_punch_in", StringType(), True),
+    StructField("last_punch_out", StringType(), True),
+    StructField("total_visits_outside_premises", IntegerType(), True),
+    StructField("total_duration_in_premises", IntegerType(), True)
+])
+
+# Create a PySpark DataFrame with the defined schema
+df_staging_employee_attendance = spark.read.format("csv").option("header", False).schema(schema2).load(input_path2)
+
+#redefininng schema for date columns :
+df_staging_employee_attendance = df_staging_employee_attendance.withColumn("event_date", to_date(df_staging_employee_attendance["event_date"], 'yyyy-MM-dd')) \
+    .withColumn("first_punch_in", col("first_punch_in").cast("timestamp")) \
+    .withColumn("last_punch_out", col("last_punch_out").cast("timestamp")) 
+    
+#df_staging_employee_attendance.show()
+#df_staging_employee_attendance.printSchema()
+
+
+#3:df_staging_employee_facility_log
+
+input_path3="s3://prod-wayfair-staging-bucket-1/staging_data/employee-facility-log/"
+
+
+# Define the schema for the PySpark DataFrame
+schema3 = StructType([
+    StructField("event_id", StringType(), True),
+    StructField("event_date", StringType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("total_visits_in_cafeteria", IntegerType(), True),
+    StructField("total_visits_in_rest_room", IntegerType(), True),
+    StructField("total_duration_in_cafeteria", IntegerType(), True),
+    StructField("total_duration_in_rest_room", IntegerType(), True)
+])
+
+# Create a PySpark DataFrame with the defined schema
+df_staging_employee_facility_log = spark.read.format("csv").option("header", False).schema(schema3).load(input_path3)
+
+#redefininng schema for date columns :
+df_staging_employee_facility_log = df_staging_employee_facility_log.withColumn("event_date", to_date(df_staging_employee_facility_log["event_date"], 'yyyy-MM-dd')) 
+
+#df_staging_employee_facility_log.show()
+#df_staging_employee_facility_log.printSchema()
+
+
+
+#4:df_staging_employee_shift_details
+
+
+input_path4='s3://prod-wayfair-staging-bucket-1/staging_data/Employee_shift_details/'
+
+
+# Define the schema for the PySpark DataFrame
+schema4 = StructType([
+    StructField("shift_id", StringType(), True),
+    StructField("shift_date", StringType(), True),
+    StructField("shift_name", StringType(), True),
+    StructField("scheduled_arrival_time_FTE_PTFH", StringType(), True),
+    StructField("scheduled_departure_time_PTFH", StringType(), True),
+    StructField("meal_start_time", StringType(), True),
+    StructField("meal_end_time", StringType(), True),
+    StructField("scheduled_arrival_time_PTSH", StringType(), True),
+    StructField("scheduled_departure_time_FTE_PTSH", StringType(), True),
+    StructField("scheduled_work_duration_PTFH", IntegerType(), True),
+    StructField("scheduled_work_duration_PTSH", IntegerType(), True),
+    StructField("scheduled_work_duration_FTE", IntegerType(), True),
+    StructField("scheduled_meal_duration", IntegerType(), True)
+])
+
+# Create a PySpark DataFrame with the defined schema
+df_staging_employee_shift_details = spark.read.format("csv").option("header", False).schema(schema4).load(input_path4)
+
+# type casting to date & timestamp columns to respective datatype:
+df_staging_employee_shift_details = df_staging_employee_shift_details.withColumn("shift_date", to_date(df_staging_employee_shift_details["shift_date"], 'yyyy-MM-dd')) \
+    .withColumn("meal_start_time", col("meal_start_time").cast("timestamp")) \
+    .withColumn("meal_end_time", col("meal_end_time").cast("timestamp")) \
+    .withColumn("scheduled_arrival_time_FTE_PTFH", col("scheduled_arrival_time_FTE_PTFH").cast("timestamp")) \
+    .withColumn("scheduled_arrival_time_PTSH", col("scheduled_arrival_time_PTSH").cast("timestamp")) \
+    .withColumn("scheduled_departure_time_PTFH", col("scheduled_departure_time_PTFH").cast("timestamp")) \
+    .withColumn("scheduled_departure_time_FTE_PTSH", col("scheduled_departure_time_FTE_PTSH").cast("timestamp")) 
+
+#df_staging_employee_shift_details.show()
+#df_staging_employee_shift_details.printSchema()
+
+
+
+
+
+
+#5:df_staging_employee_leave_details
+
+input_path5='s3://prod-wayfair-staging-bucket-1/staging_data/Employee_leave_details/'
+
+
+# Define the schema for the PySpark DataFrame
+schema5 = StructType([
+    StructField("application_id", StringType(), True),
+    StructField("application_date", StringType(), True),
+    StructField("leave_date", StringType(), True),
+    StructField("employee_id", IntegerType(), True),
+    StructField("manager_id", StringType(), True),
+    StructField("approval_status", StringType(), True),
+    StructField("leave_type", StringType(), True),
+    StructField("leave_start_timestamp", StringType(), True),
+    StructField("leave_end_timestamp", StringType(), True),
+    StructField("leave_duration", StringType(), True),
+    StructField("is_first_half_day", IntegerType(), True),
+    StructField("is_second_half_day", IntegerType(), True),
+    StructField("is_full_day_leave", IntegerType(), True)
+])
+
+# Create a PySpark DataFrame with the defined schema
+df_staging_employee_leave_details = spark.read.format("csv").option("header", True).schema(schema5).load(input_path5)
+
+
+#redefininng schema for date columns :
+df_staging_employee_leave_details = df_staging_employee_leave_details.withColumn("application_date", to_date(df_staging_employee_leave_details["application_date"], 'yyyy-MM-dd')) \
+                  .withColumn("leave_date", to_date(df_staging_employee_leave_details["leave_date"], 'yyyy-MM-dd')) \
+                  .withColumn("leave_start_timestamp", col("leave_start_timestamp").cast("timestamp")) \
+                  .withColumn("leave_end_timestamp", col("leave_end_timestamp").cast("timestamp")) \
+                  .withColumn("leave_duration", col("leave_duration").cast("timestamp")) \
+    
+
+
+#df_staging_employee_leave_details.show()
+#df_staging_employee_leave_details.printSchema()
+
+
+#joins
+
+
+df_staging_employee_details.createOrReplaceTempView("vw_employee_details")
+df_staging_employee_shift_details.createOrReplaceTempView("vw_employee_shift_details")
+df_staging_employee_leave_details.createOrReplaceTempView("vw_employee_leave_details")
+df_staging_employee_attendance.createOrReplaceTempView("vw_employee_attendance")
+df_staging_employee_facility_log.createOrReplaceTempView("vw_employee_facility_log")
+
+tmp_join_1 = spark.sql(
+  '''
+  SELECT a.date,a.employee_id,a.emp_full_name,a.batch_id,a.location_id,a.shift_id,a.employee_type_id,
+  case
+  when a.employee_type_id="PTFH" then "part time first half"
+  when a.employee_type_id="PTSH" then "part time second half"
+  when a.employee_type_id="FT01" then "full time employee"
+  end as employee_type,
+  b.first_punch_in,b.last_punch_out,b.total_visits_outside_premises,b.total_duration_in_premises
+  FROM vw_employee_details a
+  LEFT OUTER JOIN vw_employee_attendance b
+  ON a.employee_id = b.employee_id
+  AND a.date = b.event_date
+  '''
+)
+
+#tmp_join_1.show()
+#tmp_join_1.printSchema()
+
+
+
+tmp_join_1.createOrReplaceTempView("vw_tmp_join_1") 
+tmp_join_2=spark.sql(
+    '''
+    select c.*,d.total_duration_in_cafeteria,total_duration_in_rest_room
+    from vw_tmp_join_1 c
+    left outer join vw_employee_facility_log d
+    on c.employee_id=d.employee_id
+    and c.date=d.event_date
+    '''
+    )
+
+
+#tmp_join_2.show()
+#tmp_join_2.printSchema()
+
+
+
+
+tmp_join_2.createOrReplaceTempView("vw_tmp_join_2")
+
+tmp_join_3=spark.sql(
+    '''
+    select e.*,f.shift_name,f.meal_start_time,f.meal_end_time,f.scheduled_meal_duration,f.scheduled_arrival_time_FTE_PTFH,f.scheduled_arrival_time_PTSH,f.scheduled_departure_time_PTFH,f.scheduled_departure_time_FTE_PTSH,f.scheduled_work_duration_PTFH,f.scheduled_work_duration_PTSH,f.scheduled_work_duration_FTE
+    from vw_tmp_join_2 e
+    left outer join vw_employee_shift_details f
+    on e.shift_id=f.shift_id
+    and e.date=f.shift_date
+    '''
+    )
+
+#tmp_join_3.show()
+#tmp_join_3.printSchema()
+
+
+
+tmp_join_3.createOrReplaceTempView("vw_tmp_join_3")
+
+tmp_final_join=spark.sql(
+    '''
+    select t.*,m.application_id,m.application_date,m.approval_status,m.leave_type,m.leave_start_timestamp,m.leave_end_timestamp,m.leave_duration,m.is_first_half_day,m.is_second_half_day,m.is_full_day_leave
+    from vw_tmp_join_3 t
+    left outer join vw_employee_leave_details m
+    on t.employee_id=m.employee_id
+    and t.date=m.leave_date
+    '''
+    )
+    
+df_final=tmp_final_join
+#df_final.show()
+#df_final.printSchema()
+
+#Writing down to s3 target location:
+output_path = "s3://prod-wayfair-foundation-buckett/foundation_data/Employee_performance_metrics/"
+df_final.coalesce(1).write.option("header", False).format("csv").mode("overwrite").save(output_path)

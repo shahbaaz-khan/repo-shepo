@@ -1,0 +1,9 @@
+Glue JOBS Staging Scripts
+
+1:Gj-staging-employee-details - Triggered by lambda
+2:Gj-staging-employee-attendance - Triggered by lambda
+3:Gj-staging-employee-facility-log - Triggered by lambda
+4:Gj-staging-employee-shift-details - Triggered by lambda
+5:Gj-staging-employee-leave-details - Triggered by lambda
+
+

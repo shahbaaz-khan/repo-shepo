@@ -1,0 +1,184 @@
+import sys
+from pyspark.sql.types import StructType, StructField, StringType, TimestampType  # Change StringType to TimestampType
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+from awsglue.dynamicframe import DynamicFrame
+from awsglue.job import Job
+from pyspark import SparkContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+import boto3
+
+# Initialize SparkContext and GlueContext
+args = getResolvedOptions(sys.argv, ['JOB_NAME','keypara'])
+sc = SparkContext()
+spark = SparkSession.builder.appName("example").getOrCreate()
+glueContext = GlueContext(sc)
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+
+input_path=args['keypara']
+
+# Input path
+#input_path = "s3://prod-wayfair-raw-buckett/raw_data/Employee_shift_details/"
+
+# Define the schema for the PySpark DataFrame
+schema = StructType([
+    StructField("shift_id", StringType(), True),
+    StructField("shift_date", StringType(), True),
+    StructField("shift_name", StringType(), True),
+    StructField("shift_first_half_start_time", StringType(), True),
+    StructField("shift_first_half_end_time", StringType(), True),
+    StructField("meal_start_time", StringType(), True),
+    StructField("meal_end_time", StringType(), True),
+    StructField("shift_second_half_start_time", StringType(), True),
+    StructField("shift_second_half_end_time", StringType(), True),
+])
+
+# Create a PySpark DataFrame with the defined schema
+df = spark.read.format("csv").option("header", True).option("inferSchema", True).load(input_path)
+
+# Type casting to date & timestamp columns to respective datatype:
+df = df.withColumn("shift_date", to_date(df["shift_date"], 'yyyy-MM-dd')) \
+    .withColumn("shift_first_half_start_time", col("shift_first_half_start_time").cast("timestamp")) \
+    .withColumn("shift_first_half_end_time", col("shift_first_half_end_time").cast("timestamp")) \
+    .withColumn("meal_start_time", col("meal_start_time").cast("timestamp")) \
+    .withColumn("meal_end_time", col("meal_end_time").cast("timestamp")) \
+    .withColumn("shift_second_half_start_time", col("shift_second_half_start_time").cast("timestamp")) \
+    .withColumn("shift_second_half_end_time", col("shift_second_half_end_time").cast("timestamp"))
+
+df.createOrReplaceTempView("vw_employee_shift_details")
+
+tmp_staging_employee_shift_details = spark.sql(
+  '''
+  SELECT shift_id, shift_date,shift_name,
+        shift_first_half_start_time as scheduled_arrival_time_FTE_PTFH,
+         shift_first_half_end_time as scheduled_departure_time_PTFH,
+         meal_start_time, meal_end_time,
+         shift_second_half_start_time as scheduled_arrival_time_PTSH,
+        shift_second_half_end_time as scheduled_departure_time_FTE_PTSH,
+        TIMESTAMPDIFF(SECOND, shift_first_half_start_time, shift_first_half_end_time) as scheduled_work_duration_PTFH,
+        TIMESTAMPDIFF(SECOND, shift_second_half_start_time, shift_second_half_end_time) as scheduled_work_duration_PTSH,
+        TIMESTAMPDIFF(SECOND, shift_first_half_start_time, shift_second_half_end_time) as scheduled_work_duration_FTE,
+        TIMESTAMPDIFF(SECOND, meal_start_time, meal_end_time) as scheduled_meal_duration
+    FROM vw_employee_shift_details
+  '''
+)
+df = tmp_staging_employee_shift_details
+
+
+    
+
+#df.show()
+#df.printSchema()
+
+
+#Writing down to s3 target location:
+output_path = "s3://prod-wayfair-staging-bucket-1/staging_data/Employee_shift_details/"
+df.coalesce(1).write.option("header", False).format("csv").mode("overwrite").save(output_path)
+
+
+
+job_id = args['JOB_ID']
+job_name = args['JOB_NAME']
+job_run_id = args['JOB_RUN_ID']
+
+print(args)
+
+jdbc_url = "jdbc:sqlserver://wayfair-prod-db.c98yykqo2trj.us-east-1.rds.amazonaws.com:1433;databaseName=prod_wayfair_source"
+username = "developer_1"
+password = "Wayfair_1234"
+dbtable = "dbo.tbl_job_execution_status"
+
+df_jobs_schedule_status= spark.read \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .load().cache()
+
+
+
+# making CTE of dataframe
+df_jobs_schedule_status.createOrReplaceTempView("vw_job_status")
+
+
+# Get the current date directly in the query
+query = f"""
+SELECT
+    execution_date,
+    job_id,
+    job_name,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN '{job_run_id}' ELSE job_run_id END AS job_run_id,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN 1 ELSE is_completed END AS is_completed,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN 'lambda trigger' ELSE job_executed_by END AS job_executed_by
+FROM vw_job_status
+"""
+
+# Execute the query and store the results
+df_jobs_schedule_status = spark.sql(query)
+df_jobs_schedule_status.show()
+df_jobs_schedule_status.printSchema()
+
+
+
+
+# do not run below part :
+df_jobs_schedule_status.write \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+    .mode("overwrite").save() 
+
+
+
+
+
+# Filter for the specific job_id and check is_completed
+filtered_df = df_jobs_schedule_status.filter(
+    col("job_id").isin(
+        "j_c65c6c7d10240c2e74449a66437a051cf5b2d58f6986fe03c8a877e8643d10cd",
+        "j_822355868ae35fa85e926a45f057960f32fb126974e07ea9c7c03f982db58c19",
+        "j_8b70ccb9b71110f2012e29032f220746da3aef602eea8d0417306954191e7cd3",
+        "j_c865a434f83a97c27b268a90280946fa68fa9949401b2d0fadf032122d03ad43"
+    ))\
+    .filter(col("execution_date") == current_date())\
+    .filter(col("is_completed") == 1)
+
+
+
+
+
+
+
+
+# Checking if other dependent jobs are completed. If completed, then we will trigger the foundation job:
+if filtered_df.count() == 4:
+    print("All staging jobs are completed.")
+    print("Invoking lambda function to execute foundation job.")
+    
+    def invoke_foundation_emp_performance_lambda():
+        try:
+            lambda_client = boto3.client('lambda')
+            function_name = "lm_foundation_employee_performance_metrics"
+            lambda_client.invoke(
+                FunctionName=function_name,
+                InvocationType='RequestResponse'
+            )
+            
+            print("Lambda function for foundation employee performance has been invoked successfully")
+        except Exception as e:
+            print(f"Error invoking Lambda function: {e}")
+
+    # Invoke the function
+    invoke_foundation_emp_performance_lambda()
+    
+else:
+    print("Dependent jobs are not finished yet.")
+    
+

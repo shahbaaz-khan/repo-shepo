@@ -1,0 +1,73 @@
+import sys
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.utils import getResolvedOptions
+from awsglue.job import Job
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, TimestampType
+from pyspark.sql.functions import col, to_date, expr
+
+# Initialize SparkContext and GlueContext
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+jdbc_url = "jdbc:sqlserver://wayfair-prod-db.c98yykqo2trj.us-east-1.rds.amazonaws.com:1433;databaseName=prod_wayfair_source;"
+username = "developer_1"
+password = "Wayfair_1234"
+dbtable = "dbo.employee_facility_log"
+
+print("fetching data into pyspark df from source RDS db")
+source_df = spark.read \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+    .load()
+
+
+
+#defining schema :
+schema = StructType([
+ StructField("event_id", StringType(), True),
+ StructField("event_date", StringType(), True),
+ StructField("employee_id", StringType(), True),
+ StructField("cafeteria_punch_in", StringType(), True),
+  StructField("cafeteria_punch_out", StringType(), True),
+ StructField("rest_room_punch_in", StringType(), True),
+ StructField("rest_room_punch_out", StringType(), True),
+ StructField("location_id", IntegerType(), True),
+ StructField("shift_id", StringType(), True)
+])
+
+df = source_df.select(
+    col("event_id"),
+    col("event_date"),
+    col("employee_id"),
+    col("cafeteria_punch_in"),
+    col("cafeteria_punch_out"),
+    col("rest_room_punch_in"),
+    col("rest_room_punch_out"),
+    col("location_id"),
+    col("shift_id"))
+
+
+# Type casting to date & timestamp columns to respective datatype
+df = df.withColumn("event_date", to_date(col("event_date"), 'yyyy-MM-dd')) \
+    .withColumn("cafeteria_punch_in", col("cafeteria_punch_in").cast(TimestampType())) \
+    .withColumn("cafeteria_punch_out", col("cafeteria_punch_out").cast(TimestampType())) \
+    .withColumn("rest_room_punch_in", col("rest_room_punch_in").cast(TimestampType())) \
+    .withColumn("rest_room_punch_out", col("rest_room_punch_out").cast(TimestampType())) \
+    .where(col("event_date") <= expr("current_date() - interval 1 day"))
+    
+    
+#df.show()
+#df.printSchema()
+
+#Write into a single CSV file to the target location
+df.coalesce(1).write.option("header", True).csv("s3://prod-wayfair-raw-buckett/raw_data/Employee_facility_log/", mode="overwrite")

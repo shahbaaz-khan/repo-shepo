@@ -1,0 +1,243 @@
+
+import sys
+from awsglue.transforms import *
+from awsglue.utils import getResolvedOptions
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from awsglue.job import Job
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from pyspark.sql.functions import *
+import boto3
+
+# Get the arguments passed to the script
+args = getResolvedOptions(sys.argv, ['JOB_NAME'])
+
+# Create a Spark session
+spark = SparkSession.builder.appName("Test Spark").getOrCreate()
+
+# Create a GlueContext
+glueContext = GlueContext(spark.sparkContext)
+
+# Create a Job
+job = Job(glueContext)
+job.init(args['JOB_NAME'], args)
+
+
+
+# taking input from s3
+input_path1='s3://prod-wayfair-raw-buckett/raw_data/Employee_punch_in/'
+
+
+#defining schema :
+custom_schema = StructType([
+ StructField("event_id", StringType(), True),
+ StructField("event_date", StringType(), True),
+ StructField("employee_id", StringType(), True),
+ StructField("event_timestamp", StringType(), True),
+ StructField("location_id", IntegerType(), True),
+ StructField("shift_id", StringType(), True)
+])
+
+# Create a PySpark DataFrame
+df_punch_in = spark.read.format("csv").option("header", True).option("inferSchema", True).schema(custom_schema).load(input_path1)
+
+# Displaying the DataFrame
+#df_punch_in.show()
+#df_punch_in.printSchema()
+
+
+# type casting to date & timestamp columns to respective datatype :
+df_punch_in = df_punch_in \
+ .withColumn("event_date", to_date(df_punch_in["event_date"], 'yyyy-MM-dd')) \
+ .withColumn("event_timestamp", col("event_timestamp").cast("timestamp")) \
+ .where(col("event_date")<=expr(" current_date() - interval 1 day "))
+
+#df_punch_in.show()
+#df_punch_in.printSchema()
+
+
+# creating df_punch_out:
+
+#taking input from s3
+
+input_path2='s3://prod-wayfair-raw-buckett/raw_data/Employee_punch_out/'
+
+#using same schema from custom_schema as column names and data-type both are same for both df:
+df_punch_out = spark.read.format("csv").option("header", True).option("inferSchema", True).schema(custom_schema).load(input_path2)
+
+# Displaying the DataFrame
+#df_punch_out.show()
+
+
+# type casting to date & timestamp columns to respective datatype :
+df_punch_out = df_punch_out \
+ .withColumn("event_date", to_date(df_punch_out["event_date"], 'yyyy-MM-dd')) \
+ .withColumn("event_timestamp", col("event_timestamp").cast("timestamp")) \
+ .where(col("event_date")<=expr(" current_date() - interval 1 day "))
+ 
+ 
+#df_punch_out.show()
+#df_punch_out.printSchema()
+
+
+df_punch_in.createOrReplaceTempView("vw_raw_punch_in")
+df_punch_out.createOrReplaceTempView("vw_raw_punch_out")
+
+
+
+# creating temporary df from vw_raw_punch_in :
+tmp_punch_in_duration=spark.sql('''
+ select event_date,employee_id,event_timestamp as punch_in
+ ,row_number()over(partition by event_date,employee_id order by event_timestamp) as RN1 
+ FROM vw_raw_punch_in ''')
+# creating temporary df from vw_raw_punch_out
+tmp_punch_out_duration=spark.sql('''
+ select event_date,employee_id,event_timestamp as punch_out
+ ,row_number()over(partition by event_date,employee_id order by event_timestamp) as RN2
+ FROM vw_raw_punch_out ''')
+ 
+tmp_punch_in_duration.createOrReplaceTempView("vw_raw_punch_in_intermediate")
+tmp_punch_out_duration.createOrReplaceTempView("vw_raw_punch_out_intermediate")
+
+
+tmp_pre_final_emp_attendance = spark.sql(
+ '''
+ SELECT
+ a.event_date,
+ a.employee_id,
+ MIN(a.punch_in) as first_punch_in,
+ MAX(b.punch_out) as last_punch_out,
+ COUNT(a.punch_in) as total_visits_outside_premises,
+ SUM(TIMESTAMPDIFF(SECOND, a.punch_in, b.punch_out)) as tota_duration_in_premises
+ FROM
+ vw_raw_punch_in_intermediate a
+ LEFT JOIN
+ vw_raw_punch_out_intermediate b
+ ON
+ a.event_date = b.event_date
+ AND a.employee_id = b.employee_id
+ AND a.RN1 = b.RN2
+ Group by a.event_date,a.employee_id
+ '''
+)
+
+df=tmp_pre_final_emp_attendance
+
+'''
+df = tmp_pre_final_emp_attendance.withColumn(
+ "tota_duration_in_premises",
+ expr("INTERVAL '1' SECOND * duration_in_seconds") # Multiply by INTERVAL '1' SECOND
+ .cast("string")
+ .substr(12, 8) # Extract the HH:MM:SS portion
+).drop("duration_in_seconds")
+'''
+
+# Writing down to s3 target location:
+output_path = "s3://prod-wayfair-staging-bucket-1/staging_data/Employee_attendance_table/"
+df.write.option("header", False).format("csv").mode("overwrite").save(output_path)
+
+
+print("triggered by lambda")
+
+
+job_id = args['JOB_ID']
+job_name = args['JOB_NAME']
+job_run_id = args['JOB_RUN_ID']
+
+print(args)
+
+jdbc_url = "jdbc:sqlserver://wayfair-prod-db.c98yykqo2trj.us-east-1.rds.amazonaws.com:1433;databaseName=prod_wayfair_source"
+username = "developer_1"
+password = "Wayfair_1234"
+dbtable = "dbo.tbl_job_execution_status"
+
+df_jobs_schedule_status= spark.read \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .load().cache()
+
+
+
+# making CTE of dataframe
+df_jobs_schedule_status.createOrReplaceTempView("vw_job_status")
+
+
+# Get the current date directly in the query
+query = f"""
+SELECT
+    execution_date,
+    job_id,
+    job_name,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN '{job_run_id}' ELSE job_run_id END AS job_run_id,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN 1 ELSE is_completed END AS is_completed,
+    CASE WHEN job_id = '{job_id}' AND job_name = '{job_name}' AND execution_date = current_date() THEN 'lambda trigger' ELSE job_executed_by END AS job_executed_by
+FROM vw_job_status
+"""
+
+# Execute the query and store the results
+df_jobs_schedule_status = spark.sql(query)
+df_jobs_schedule_status.show()
+df_jobs_schedule_status.printSchema()
+
+
+
+
+# do not run below part :
+df_jobs_schedule_status.write \
+    .format("jdbc") \
+    .option("url", jdbc_url) \
+    .option("dbtable", dbtable) \
+    .option("user", username) \
+    .option("password", password) \
+    .option("driver", "com.microsoft.sqlserver.jdbc.SQLServerDriver") \
+    .mode("overwrite").save() 
+
+
+
+
+
+# Filter for the specific job_id and check is_completed
+filtered_df = df_jobs_schedule_status.filter(
+    col("job_id").isin(
+        "j_c65c6c7d10240c2e74449a66437a051cf5b2d58f6986fe03c8a877e8643d10cd",
+        "j_822355868ae35fa85e926a45f057960f32fb126974e07ea9c7c03f982db58c19",
+        "j_8b70ccb9b71110f2012e29032f220746da3aef602eea8d0417306954191e7cd3",
+        "j_4112dcf0a94d59f889288219d649f18bb1d28a9ac0fbcb5ce2e0c4411c17852a"
+    ))\
+    .filter(col("execution_date") == current_date())\
+    .filter(col("is_completed") == 1)
+
+
+
+
+
+
+
+# Checking if other dependent jobs are completed. If completed, then we will trigger the foundation job:
+if filtered_df.count() == 4:
+    print("All staging jobs are completed.")
+    print("Invoking lambda function to execute foundation job.")
+    
+    def invoke_foundation_emp_performance_lambda():
+        try:
+            lambda_client = boto3.client('lambda')
+            function_name = "lm_foundation_employee_performance_metrics"
+            lambda_client.invoke(
+                FunctionName=function_name,
+                InvocationType='RequestResponse'
+            )
+            
+            print("Lambda function for foundation employee performance has been invoked successfully")
+        except Exception as e:
+            print(f"Error invoking Lambda function: {e}")
+
+    # Invoke the function
+    invoke_foundation_emp_performance_lambda()
+    
+else:
+    print("Dependent jobs are not finished yet.")
+    
