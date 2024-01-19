@@ -1,0 +1,31 @@
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col
+
+# Create a SparkContext and GlueContext
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+
+# Define the S3 paths
+source_path = "s3://source-bucket/emp-leave-details/emp_leave_details.csv"
+destination_path = "s3://raw-bucket/emp-leave-details/"
+
+# Read CSV data into a PySpark DataFrame
+shift_details_df = spark.read.csv(source_path, header=True, inferSchema=True)
+
+
+# Example transformation: Rename columns
+shift_details_df = (
+    shift_details_df
+    .withColumnRenamed("applicationid", "application_id")
+    .withColumnRenamed("empname", "emp_name")
+    # Add more withColumnRenamed lines for additional column renames
+)
+
+# Write the DataFrame to the destination S3 path in CSV format
+shift_details_df.write \
+    .format("csv") \
+    .mode("overwrite") \
+    .save(destination_path)

@@ -1,0 +1,48 @@
+from pyspark.context import SparkContext
+from awsglue.context import GlueContext
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, TimestampType
+from pyspark.sql.functions import col
+
+# Create a SparkContext and GlueContext
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+
+# Define RDS connection properties
+rds_url = "jdbc:mysql://your-rds-endpoint:3306/prod_rds_db"
+rds_table = "tbl_fascility_log"
+rds_properties = {
+    "user": "your-username",
+    "password": "your-password",
+    "driver": "com.mysql.cj.jdbc.Driver"
+}
+
+# Read data from RDS into a PySpark DataFrame
+rds_df = spark.read \
+    .format("jdbc") \
+    .option("url", rds_url) \
+    .option("dbtable", rds_table) \
+    .option("user", rds_properties["user"]) \
+    .option("password", rds_properties["password"]) \
+    .option("driver", rds_properties["driver"]) \
+    .load()
+
+# Apply the custom schema to the DataFrame
+rds_df = (
+    rds_df
+    .withColumn("event_id", col("event_id").cast(IntegerType()))
+    .withColumn("event_timestamp", col("event_timestamp").cast(TimestampType()))
+    .withColumn("employee_id", col("employee_id").cast(IntegerType()))
+    .withColumn("cafeteria_punch_in", col("cafeteria_punch_in").cast(StringType()))
+    .withColumn("cafeteria_punch_out", col("cafeteria_punch_out").cast(StringType()))
+    .withColumn("restroom_punch_in", col("restroom_punch_in").cast(StringType()))
+    .withColumn("restroom_punch_out", col("restroom_punch_out").cast(StringType()))
+)
+
+# Write the DataFrame to S3 target location
+s3_target_location = "s3://your-s3-bucket/path/to/target/"
+rds_df.write \
+    .format("csv") \
+    .mode("overwrite") \
+    .save(s3_target_location)
