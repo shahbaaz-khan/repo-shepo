@@ -1,0 +1,2 @@
+puling data from raw
+loading it to staging s3 bucket.
