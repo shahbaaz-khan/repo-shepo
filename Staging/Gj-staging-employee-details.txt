@@ -36,6 +36,7 @@ schema = StructType([
     StructField("shift_id", StringType(), True),
     StructField("employee_type", StringType(), True),
     StructField("employee_type_id", StringType(), True),
+	StructField("employee_time_waste", StringType(), True)
 ])
 
 # Create a PySpark DataFrame
